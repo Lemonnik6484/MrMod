@@ -9,7 +9,6 @@ const {
 
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
 
 const { token, clientId } = require('./config.json');
 
