@@ -1,17 +1,17 @@
 {
-  "name": "citrus",
+  "name": "mr_mod",
   "version": "0.0.1",
   "private": true,
   "description": "An all-in-one discord utility bot",
-  "homepage": "https://github.com/Lemonnik6484/Citrus#readme",
+  "homepage": "https://github.com/Lemonnik6484/MrMod",
   "bugs": {
-    "url": "https://github.com/Lemonnik6484/Citrus/issues"
+    "url": "https://github.com/Lemonnik6484/MrMod/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Lemonnik6484/Citrus.git"
+    "url": "git+https://github.com/Lemonnik6484/MrMod.git"
   },
-  "license": "SEE LICENSE IN LICENSE.md",
+  "license": "PolyForm Shield License 1.0.0",
   "author": "Lemonnik",
   "type": "commonjs",
   "main": "index.js",
