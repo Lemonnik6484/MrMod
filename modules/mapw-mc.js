@@ -35,7 +35,7 @@ function getScoreMessage() {
 }
 
 function parseBridgeMessage(text) {
-    const clean = text.replace(/\*\*/g, '').trim();
+    const clean = text.replace(/\*\*/g, '').replace(/\\/g, '').trim();
 
     const colonMatch = clean.match(/^([A-Za-z0-9_]{2,16}):\s+(.+)$/s);
     if (colonMatch) return { mcName: colonMatch[1], content: colonMatch[2] };
