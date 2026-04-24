@@ -16,6 +16,7 @@ const { adminRoles = [], adminUsers = [] } = (() => {
 })();
 
 const DB_PATH            = path.join(__dirname, '../module_data/mapw/mapw.db');
+const WHITELIST_PATH     = path.join(__dirname, '../module_data/mapw/botWhitelist.json');
 const PAGE_SIZE          = 5;
 const WINDOW_SECONDS     = 3;
 const WINDOW_MAX_MSGS    = 2;
@@ -27,6 +28,28 @@ const WEEK_MS            = 7 * 24 * 60 * 60 * 1000;
 const COLLECTOR_TIMEOUT  = 5 * 60 * 1000;
 
 fs.mkdirSync(path.join(__dirname, '../module_data/mapw'), { recursive: true });
+
+function loadBotWhitelist() {
+    try {
+        const raw = fs.readFileSync(WHITELIST_PATH, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+            console.warn('[MAPW] botWhitelist.json should be an array of bot user IDs, defaulting to empty.');
+            return new Set();
+        }
+        return new Set(parsed);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            fs.writeFileSync(WHITELIST_PATH, '[]', 'utf8');
+            console.log('[MAPW] botWhitelist.json not found — created an empty one at', WHITELIST_PATH);
+        } else {
+            console.warn('[MAPW] Failed to load botWhitelist.json:', err.message);
+        }
+        return new Set();
+    }
+}
+
+let botWhitelist = loadBotWhitelist();
 
 const db = new Database(DB_PATH);
 
@@ -432,7 +455,8 @@ const slashCommand = {
 
 const events = {
     messageCreate(message) {
-        if (message.author?.bot || !message.guildId) return;
+        if (message.author?.bot && !botWhitelist.has(message.author.id)) return;
+        if (!message.guildId) return;
         scoreMessage(message.guildId, message.author.id, message.content);
     },
     voiceStateUpdate(oldState, newState) {
@@ -443,6 +467,7 @@ const events = {
 function init(client) {
     setInterval(tickAllVc, 60 * 1000);
     console.log('[MAPW] SQLite DB ready. Voice ticker started.');
+    console.log(`[MAPW] Bot whitelist loaded: ${botWhitelist.size} entr${botWhitelist.size === 1 ? 'y' : 'ies'}`);
 }
 
 module.exports = {
