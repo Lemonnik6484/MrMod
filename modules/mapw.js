@@ -450,4 +450,5 @@ module.exports = {
     slash: slashCommand,
     events,
     init,
+    scoreMessage,
 };
