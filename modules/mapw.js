@@ -410,7 +410,7 @@ const slashCommand = {
                 .setDescription(
                     `**${displayName}**\n` +
                     `> Weekly total: \`${parseInt(row.total)} pts\`\n` +
-                    `> Today: \`${parseInt(row.daily_ptstotal)} pts\``
+                    `> Today: \`${parseInt(row.daily_pts)} pts\``
                 )
                 .setColor(0x4fcf70)
                 .setTimestamp();
