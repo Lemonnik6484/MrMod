@@ -10,6 +10,7 @@ const {
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require("fs");
+const test = require("node:test");
 
 const { adminRoles = [], adminUsers = [] } = (() => {
     try { return require('../config.json'); } catch { return {}; }
@@ -187,10 +188,10 @@ function rawScore(content) {
     if (Math.max(...Object.values(freq)) / text.length > 0.70) return 0;
 
     const words = text.split(/\s+/).filter(Boolean).length;
-    if (words < 3)   return 0;
-    if (words <= 20) return 1;
-    if (words <= 50) return 2;
-    return 1.5;
+    if (words < 3 && text.length < 7) return text.length * 0.03;
+    if (words <= 20) return 1 + text.length * 0.05;
+    if (words <= 50) return 2 + text.length * 0.03;
+    return 1.5 * text.length * 0.01;
 }
 
 function scoreMessage(guildId, userId, content) {
