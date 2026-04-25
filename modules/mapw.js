@@ -194,7 +194,7 @@ function rawScore(content) {
     return 1.5 * text.length * 0.01;
 }
 
-function scoreMessage(guild, guildId, userId, content) {
+async function scoreMessage(guild, guildId, userId, content) {
     const seenList = getSeen(guildId, userId);
     const h = hashMsg(content);
     if (seenList.includes(h)) return 0;
@@ -205,7 +205,7 @@ function scoreMessage(guild, guildId, userId, content) {
 
     const bucket = Math.floor(Date.now() / (WINDOW_SECONDS * 1000));
     const winMap = getWindow(guildId, userId);
-    const count  = winMap.get(bucket) ?? 0;
+    const count = winMap.get(bucket) ?? 0;
     if (count >= WINDOW_MAX_MSGS) return 0;
     winMap.set(bucket, count + 1);
 
@@ -213,14 +213,26 @@ function scoreMessage(guild, guildId, userId, content) {
 
     const row = getOrCreate(guildId, userId);
     let effective = raw;
-    if (row.daily_pts >= DAY_TIER2)      effective *= 0.25;
+    if (row.daily_pts >= DAY_TIER2) effective *= 0.25;
     else if (row.daily_pts >= DAY_TIER1) effective *= 0.5;
 
     row.daily_pts += effective;
-    row.total     += effective;
+    row.total += effective;
     saveRow(row);
 
-    console.log(`[mapw] +${effective.toFixed(2)} pts → ${guild.members.cache.get(userId).displayName} (${userId})`);
+    let displayName;
+
+    try {
+        let member = guild.members.cache.get(userId)
+        if (!member) {
+            member = await guild.members.fetch(userId);
+        }
+        displayName = member.displayName;
+    } catch {
+        displayName = `Unknown User`;
+    }
+
+    console.log(`[mapw] +${effective.toFixed(2)} pts → ${displayName} (${userId})`);
 
     return effective;
 }
@@ -460,7 +472,7 @@ const events = {
     messageCreate(message) {
         if (message.author?.bot && !botWhitelist.has(message.author.id)) return;
         if (!message.guildId) return;
-        scoreMessage(message.guild, message.guildId, message.author.id, message.content);
+        scoreMessage(message.guild, message.guildId, message.author.id, message.content).then(r => {});
     },
     voiceStateUpdate(oldState, newState) {
         handleVoiceStateUpdate(oldState, newState);

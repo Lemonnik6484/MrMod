@@ -18,7 +18,7 @@ function getLinks() { return loadJson('links.json')        ?? {}; }
 
 let _scoreMessage = null;
 
-function getScoreMessage() {
+async function getScoreMessage() {
     if (_scoreMessage) return _scoreMessage;
     try {
         const mapw = require('./mapw.js');
@@ -80,10 +80,10 @@ const events = {
         const userId = links[mcName];
         if (!userId) return;
 
-        const scoreMessage = getScoreMessage();
+        const scoreMessage = await getScoreMessage();
         if (!scoreMessage) return;
 
-        const pts = scoreMessage(message.guild, message.guildId, userId, content);
+        const pts = await scoreMessage(message.guild, message.guildId, userId, content);
         if (pts > 0) {
             console.log(`[mapw-mc] +${pts.toFixed(2)} pts → ${mcName} (${userId})`);
         }
