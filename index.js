@@ -94,20 +94,29 @@ client.once(Events.ClientReady, async () => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-
     const cmd = client.slashCommands.get(interaction.commandName);
     if (!cmd) return;
 
-    try {
-        await cmd.execute(interaction, client);
-    } catch (err) {
-        console.error(err);
+    if (interaction.isAutocomplete()) {
+        try {
+            await cmd.autocomplete(interaction);
+        } catch (error) {
+            console.error(error);
+        }
+        return;
+    }
 
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: "Error", ephemeral: true });
-        } else {
-            await interaction.reply({ content: "Error", ephemeral: true });
+    if (interaction.isChatInputCommand()) {
+        try {
+            await cmd.execute(interaction, client);
+        } catch (err) {
+            console.error(err);
+
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: "Error", ephemeral: true });
+            } else {
+                await interaction.reply({ content: "Error", ephemeral: true });
+            }
         }
     }
 });

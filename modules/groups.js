@@ -49,15 +49,6 @@ const stmts = {
     `),
 };
 
-function autocompleteGroups(guildId, focused) {
-    const all = stmts.listGroups.all(guildId).map(r => r.name);
-    const lower = focused.toLowerCase();
-    return all
-        .filter(name => name.toLowerCase().startsWith(lower))
-        .slice(0, 25)
-        .map(name => ({ name, value: name }));
-}
-
 const slashCommand = {
     data: new SlashCommandBuilder()
         .setName('group')
@@ -135,9 +126,17 @@ const slashCommand = {
         ),
 
     async autocomplete(interaction) {
-        const focused = interaction.options.getFocused();
-        const choices = autocompleteGroups(interaction.guildId, focused);
-        await interaction.respond(choices);
+        const guildId = interaction.guildId;
+        const focused = interaction.options.getFocused().toLowerCase();
+
+        const groups = stmts.listGroups.all(guildId);
+        const filtered = groups
+            .filter(({ name }) => name.includes(focused))
+            .slice(0, 25);
+
+        return interaction.respond(
+            filtered.map(({ name }) => ({ name, value: name }))
+        );
     },
 
     async execute(interaction) {
