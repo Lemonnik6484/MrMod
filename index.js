@@ -10,6 +10,8 @@ const {
 const fs = require('fs');
 const path = require('path');
 
+const { initReminders } = require('./modules/remindme');
+
 const requiredDirs = [
     path.join(__dirname, 'modules'),
     path.join(__dirname, 'module_data'),
@@ -77,6 +79,7 @@ if (fs.existsSync(modulesPath)) {
 }
 
 client.once(Events.ClientReady, async () => {
+    initReminders(client);
     console.log(`Logged in as ${client.user.tag}`);
 
     const rest = new REST({ version: '10' }).setToken(token);
