@@ -110,6 +110,9 @@ const stmts = {
     allScores: db.prepare(`
         SELECT * FROM scores WHERE guild_id = ? AND total > 0 ORDER BY total DESC
     `),
+    top3: db.prepare(`
+        SELECT user_id, total FROM scores WHERE guild_id = ? AND total > 0 ORDER BY total DESC LIMIT 3
+    `),
     allGuilds: db.prepare(`
         SELECT DISTINCT guild_id FROM scores
     `),
@@ -169,6 +172,17 @@ function runWeeklyReset() {
         let totalArchived = 0;
         for (const { guild_id } of guilds) {
             const rows = stmts.allScores.all(guild_id);
+
+            const top3 = stmts.top3.all(guild_id);
+            if (top3.length > 0) {
+                const podium = top3
+                    .map((r, i) => `#${i + 1} <@${r.user_id}> — ${parseInt(r.total)} pts`)
+                    .join('\n');
+                console.log(`[MAPW] Top ${top3.length} for guild ${guild_id} before reset:\n${podium}`);
+            } else {
+                console.log(`[MAPW] Guild ${guild_id} had no scores this week.`);
+            }
+
             for (const row of rows) {
                 stmts.archiveInsert.run({
                     guild_id:    row.guild_id,
