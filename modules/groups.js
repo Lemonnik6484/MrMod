@@ -176,7 +176,7 @@ const slashCommand = {
                             `Others can join with \`/group join ${name}\`\n` +
                             `Ping everyone with \`/group ping ${name}\``
                         )
-                        .setFooter({ text: `You've been added automatically as the owner.` })
+                        .setFooter({ text: `${interaction.author.name} been added automatically as the owner` })
                 ],
             });
         }
@@ -194,7 +194,7 @@ const slashCommand = {
 
             if (stmts.isMember.get(group.id, userId)) {
                 return interaction.reply({
-                    content: `You're already in **${name}**.`,
+                    content: `You're already in **${name}**`,
                     ephemeral: true,
                 });
             }
@@ -206,7 +206,7 @@ const slashCommand = {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0x5865f2)
-                        .setDescription(`You joined **${name}**`)
+                        .setDescription(`${interaction.author.name} joined **${name}**`)
                 ],
             });
         }
@@ -216,11 +216,11 @@ const slashCommand = {
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist.`, ephemeral: true });
+                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
             }
 
             if (!stmts.isMember.get(group.id, userId)) {
-                return interaction.reply({ content: `You're not in **${name}**.`, ephemeral: true });
+                return interaction.reply({ content: `You're not in **${name}**`, ephemeral: true });
             }
 
             stmts.removeMember.run(group.id, userId);
@@ -232,7 +232,7 @@ const slashCommand = {
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0xed4245)
-                            .setDescription(`You left **${name}**`)
+                            .setDescription(`${interaction.author.name} left **${name}**`)
                     ],
                 });
             }
@@ -318,7 +318,7 @@ const slashCommand = {
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist.`, ephemeral: true });
+                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
             }
 
             await interaction.deferReply();
@@ -354,7 +354,7 @@ const slashCommand = {
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist.`, ephemeral: true });
+                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
             }
 
             const member = await interaction.guild.members.fetch(userId);
@@ -373,7 +373,7 @@ const slashCommand = {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xed4245)
-                        .setDescription(`Group **${name}** has been deleted.`)
+                        .setDescription(`Group **${name}** has been deleted`)
                 ],
             });
         }
