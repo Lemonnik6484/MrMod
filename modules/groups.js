@@ -176,7 +176,7 @@ const slashCommand = {
                             `Others can join with \`/group join ${name}\`\n` +
                             `Ping everyone with \`/group ping ${name}\``
                         )
-                        .setFooter({ text: `${interaction.author.name} been added automatically as the owner` })
+                        .setFooter({ text: `${interaction.author.displayName} been added automatically as the owner` })
                 ],
             });
         }
@@ -206,7 +206,7 @@ const slashCommand = {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0x5865f2)
-                        .setDescription(`${interaction.author.name} joined **${name}**`)
+                        .setDescription(`${interaction.author.displayName} joined **${name}**`)
                 ],
             });
         }
@@ -232,7 +232,7 @@ const slashCommand = {
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0xed4245)
-                            .setDescription(`${interaction.author.name} left **${name}**`)
+                            .setDescription(`${interaction.author.displayName} left **${name}**`)
                     ],
                 });
             }
