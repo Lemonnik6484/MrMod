@@ -22,6 +22,7 @@ db.exec(`
         created_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
         UNIQUE(guild_id, name)
     );
+
     CREATE TABLE IF NOT EXISTS memberships (
         group_id    INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
         user_id     TEXT NOT NULL,
@@ -41,6 +42,7 @@ const stmts = {
     removeMember:  db.prepare(`DELETE FROM memberships WHERE group_id = ? AND user_id = ?`),
     getMembers:    db.prepare(`SELECT user_id FROM memberships WHERE group_id = ?`),
     memberCount:   db.prepare(`SELECT COUNT(*) AS cnt FROM memberships WHERE group_id = ?`),
+
     userGroups:    db.prepare(`
         SELECT g.name FROM groups g
         JOIN memberships m ON m.group_id = g.id
@@ -130,12 +132,16 @@ const slashCommand = {
         const focused = interaction.options.getFocused().toLowerCase();
 
         const groups = stmts.listGroups.all(guildId);
+
         const filtered = groups
             .filter(({ name }) => name.includes(focused))
             .slice(0, 25);
 
         return interaction.respond(
-            filtered.map(({ name }) => ({ name, value: name }))
+            filtered.map(({ name }) => ({
+                name,
+                value: name,
+            }))
         );
     },
 
@@ -144,9 +150,12 @@ const slashCommand = {
         const guildId = interaction.guildId;
         const userId  = interaction.user.id;
 
+        const member = await interaction.guild.members.fetch(userId);
+        const displayName = member.displayName;
+
         if (sub === 'create') {
             const rawName = interaction.options.getString('name');
-            const name    = rawName.trim().toLowerCase().replace(/\s+/g, '-');
+            const name = rawName.trim().toLowerCase().replace(/\s+/g, '-');
 
             if (!/^[a-z0-9_-]+$/.test(name)) {
                 return interaction.reply({
@@ -156,6 +165,7 @@ const slashCommand = {
             }
 
             const existing = stmts.getGroup.get(guildId, name);
+
             if (existing) {
                 return interaction.reply({
                     content: `A group called **${name}** already exists`,
@@ -164,6 +174,7 @@ const slashCommand = {
             }
 
             const info = stmts.createGroup.run(guildId, name, userId);
+
             stmts.addMember.run(info.lastInsertRowid, userId);
 
             return interaction.reply({
@@ -176,13 +187,15 @@ const slashCommand = {
                             `Others can join with \`/group join ${name}\`\n` +
                             `Ping everyone with \`/group ping ${name}\``
                         )
-                        .setFooter({ text: `${interaction.author.displayName} been added automatically as the owner` })
+                        .setFooter({
+                            text: `${displayName} has been added automatically as the owner`,
+                        }),
                 ],
             });
         }
 
         if (sub === 'join') {
-            const name  = interaction.options.getString('name').toLowerCase();
+            const name = interaction.options.getString('name').toLowerCase();
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
@@ -200,47 +213,56 @@ const slashCommand = {
             }
 
             stmts.addMember.run(group.id, userId);
-            const { cnt } = stmts.memberCount.get(group.id);
 
             return interaction.reply({
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0x5865f2)
-                        .setDescription(`${interaction.author.displayName} joined **${name}**`)
+                        .setDescription(`${displayName} joined **${name}**`),
                 ],
             });
         }
 
         if (sub === 'leave') {
-            const name  = interaction.options.getString('name').toLowerCase();
+            const name = interaction.options.getString('name').toLowerCase();
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
+                return interaction.reply({
+                    content: `Group **${name}** doesn't exist`,
+                    ephemeral: true,
+                });
             }
 
             if (!stmts.isMember.get(group.id, userId)) {
-                return interaction.reply({ content: `You're not in **${name}**`, ephemeral: true });
+                return interaction.reply({
+                    content: `You're not in **${name}**`,
+                    ephemeral: true,
+                });
             }
 
             stmts.removeMember.run(group.id, userId);
+
             const { cnt } = stmts.memberCount.get(group.id);
 
             if (cnt === 0) {
                 stmts.deleteGroup.run(group.id);
+
                 return interaction.reply({
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0xed4245)
-                            .setDescription(`${interaction.author.displayName} left **${name}**`)
+                            .setDescription(`${displayName} left **${name}**`),
                     ],
                 });
             }
 
             if (group.owner_id === userId) {
                 const next = stmts.getMembers.all(group.id)[0];
+
                 if (next) {
-                    db.prepare(`UPDATE groups SET owner_id = ? WHERE id = ?`).run(next.user_id, group.id);
+                    db.prepare(`UPDATE groups SET owner_id = ? WHERE id = ?`)
+                        .run(next.user_id, group.id);
                 }
             }
 
@@ -248,17 +270,20 @@ const slashCommand = {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xfee75c)
-                        .setDescription(`You left **${name}**`)
+                        .setDescription(`You left **${name}**`),
                 ],
             });
         }
 
         if (sub === 'ping') {
-            const name    = interaction.options.getString('name').toLowerCase();
-            const group   = stmts.getGroup.get(guildId, name);
+            const name = interaction.options.getString('name').toLowerCase();
+            const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
+                return interaction.reply({
+                    content: `Group **${name}** doesn't exist`,
+                    ephemeral: true,
+                });
             }
 
             if (!stmts.isMember.get(group.id, userId)) {
@@ -269,14 +294,23 @@ const slashCommand = {
             }
 
             const members = stmts.getMembers.all(group.id);
-            const mentions = members.map(m => `<@${m.user_id}>`).join(' ');
+
+            const mentions = members
+                .map(m => `<@${m.user_id}>`)
+                .join(' ');
 
             const lines = [
-                `**${interaction.user.displayName}** is pinging **${name}**`,
+                `**${displayName}** is pinging **${name}**`,
+                '',
+                mentions,
             ];
-            lines.push('', mentions);
 
-            return interaction.reply({ content: lines.join('\n'), allowedMentions: { users: members.map(m => m.user_id) } });
+            return interaction.reply({
+                content: lines.join('\n'),
+                allowedMentions: {
+                    users: members.map(m => m.user_id),
+                },
+            });
         }
 
         if (sub === 'list') {
@@ -287,7 +321,7 @@ const slashCommand = {
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0x99aab5)
-                            .setDescription('No groups yet. Create one with `/group create <name>`.')
+                            .setDescription('No groups yet. Create one with `/group create <name>`.'),
                     ],
                 });
             }
@@ -297,8 +331,12 @@ const slashCommand = {
             );
 
             const lines = groups.map(({ name }) => {
-                const { cnt } = stmts.memberCount.get(stmts.getGroup.get(guildId, name).id);
+                const { cnt } = stmts.memberCount.get(
+                    stmts.getGroup.get(guildId, name).id
+                );
+
                 const inGroup = userGroupNames.has(name) ? ' ✅' : '';
+
                 return `**${name}**${inGroup} — ${cnt} member${cnt !== 1 ? 's' : ''}`;
             });
 
@@ -308,33 +346,42 @@ const slashCommand = {
                         .setColor(0x5865f2)
                         .setTitle(`Groups in ${interaction.guild.name}`)
                         .setDescription(lines.join('\n'))
-                        .setFooter({ text: '✅ = you\'re a member' })
+                        .setFooter({
+                            text: '✅ = you\'re a member',
+                        }),
                 ],
             });
         }
 
         if (sub === 'info') {
-            const name  = interaction.options.getString('name').toLowerCase();
+            const name = interaction.options.getString('name').toLowerCase();
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
+                return interaction.reply({
+                    content: `Group **${name}** doesn't exist`,
+                    ephemeral: true,
+                });
             }
 
             await interaction.deferReply();
 
             const members = stmts.getMembers.all(group.id);
+
             const lines = await Promise.all(
                 members.map(async ({ user_id }) => {
-                    let displayName;
+                    let memberName;
+
                     try {
                         const member = await interaction.guild.members.fetch(user_id);
-                        displayName  = member.displayName;
+                        memberName = member.displayName;
                     } catch {
-                        displayName = `<@${user_id}>`;
+                        memberName = `<@${user_id}>`;
                     }
+
                     const isOwner = user_id === group.owner_id ? ' 👑' : '';
-                    return `• ${displayName}${isOwner}`;
+
+                    return `• ${memberName}${isOwner}`;
                 })
             );
 
@@ -344,20 +391,24 @@ const slashCommand = {
                         .setColor(0x5865f2)
                         .setTitle(`Group: ${name}`)
                         .setDescription(lines.join('\n') || 'No members.')
-                        .setFooter({ text: `${members.length} member${members.length !== 1 ? 's' : ''} • 👑 = owner` })
+                        .setFooter({
+                            text: `${members.length} member${members.length !== 1 ? 's' : ''} • 👑 = owner`,
+                        }),
                 ],
             });
         }
 
         if (sub === 'delete') {
-            const name  = interaction.options.getString('name').toLowerCase();
+            const name = interaction.options.getString('name').toLowerCase();
             const group = stmts.getGroup.get(guildId, name);
 
             if (!group) {
-                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
+                return interaction.reply({
+                    content: `Group **${name}** doesn't exist`,
+                    ephemeral: true,
+                });
             }
 
-            const member = await interaction.guild.members.fetch(userId);
             const isAdmin = member.permissions.has('Administrator');
 
             if (group.owner_id !== userId && !isAdmin) {
@@ -373,7 +424,7 @@ const slashCommand = {
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0xed4245)
-                        .setDescription(`Group **${name}** has been deleted`)
+                        .setDescription(`Group **${name}** has been deleted`),
                 ],
             });
         }
