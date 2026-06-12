@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const {
     Client,
     GatewayIntentBits,
@@ -21,7 +23,8 @@ for (const dir of requiredDirs) {
     fs.mkdirSync(dir, { recursive: true });
 }
 
-const { token, clientId } = require('./config.json');
+const token = process.env.DISCORD_TOKEN;
+const clientId = process.env.DISCORD_CLIENT_ID;
 
 const PREFIX = "!";
 
