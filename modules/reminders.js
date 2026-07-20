@@ -14,13 +14,28 @@ module.exports = {
     slash: {
         data: new SlashCommandBuilder()
             .setName('reminders')
-            .setDescription('List your active reminders'),
+            .setDescription('List active reminders')
+            .addUserOption(option =>
+                option
+                    .setName('user')
+                    .setDescription('User whose reminders to view')
+                    .setRequired(false)
+            ),
 
         async execute(interaction) {
-            const rows = getByUser.all(interaction.user.id);
+            const targetUser =
+                interaction.options.getUser('user') ?? interaction.user;
+
+            const rows = getByUser.all(targetUser.id);
 
             if (rows.length === 0) {
-                return interaction.reply({ content: 'You have no active reminders', ephemeral: false });
+                return interaction.reply({
+                    content:
+                        targetUser.id === interaction.user.id
+                            ? 'You have no active reminders'
+                            : `${targetUser.username} has no active reminders`,
+                    ephemeral: false,
+                });
             }
 
             const lines = rows.map((r, i) => {
@@ -31,7 +46,10 @@ module.exports = {
             });
 
             await interaction.reply({
-                content: `**Your reminders:**\n${lines.join('\n')}`,
+                content:
+                    targetUser.id === interaction.user.id
+                        ? `**Your reminders:**\n${lines.join('\n')}`
+                        : `**Reminders for ${targetUser.tag}:**\n${lines.join('\n')}`,
                 ephemeral: false,
             });
         },
