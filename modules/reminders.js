@@ -1,4 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
+const {
+    ApplicationIntegrationType,
+    InteractionContextType,
+    SlashCommandBuilder,
+} = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 
@@ -15,6 +19,15 @@ module.exports = {
         data: new SlashCommandBuilder()
             .setName('reminders')
             .setDescription('List active reminders')
+            .setIntegrationTypes(
+                ApplicationIntegrationType.GuildInstall,
+                ApplicationIntegrationType.UserInstall,
+            )
+            .setContexts(
+                InteractionContextType.Guild,
+                InteractionContextType.BotDM,
+                InteractionContextType.PrivateChannel,
+            )
             .addUserOption(option =>
                 option
                     .setName('user')
