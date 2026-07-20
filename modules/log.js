@@ -1,4 +1,9 @@
 const zlib = require("zlib");
+const {
+    ApplicationIntegrationType,
+    InteractionContextType,
+    SlashCommandBuilder,
+} = require("discord.js");
 
 module.exports = {
     name: "logUploader",
@@ -32,6 +37,24 @@ module.exports = {
         }
     },
 
+    async readAttachment(attachment) {
+        const name = attachment.name || "file";
+
+        try {
+            const res = await fetch(attachment.url);
+            const buffer = Buffer.from(await res.arrayBuffer());
+
+            if (name.toLowerCase().endsWith(".gz")) {
+                return zlib.gunzipSync(buffer).toString("utf-8");
+            }
+
+            return buffer.toString("utf-8");
+        } catch (e) {
+            console.error("Failed to read attachment:", e);
+            return null;
+        }
+    },
+
     async handleMessage(message, force = false) {
         if (!message.attachments.size) return;
 
@@ -42,23 +65,7 @@ module.exports = {
             let content = null;
 
             if (detectedLog || force) {
-                try {
-                    const res = await fetch(attachment.url);
-                    const buffer = Buffer.from(await res.arrayBuffer());
-
-                    if (name.toLowerCase().endsWith(".gz")) {
-                        try {
-                            content = zlib.gunzipSync(buffer).toString("utf-8");
-                        } catch (e) {
-                            console.error("Failed to unzip:", e);
-                            continue;
-                        }
-                    } else {
-                        content = buffer.toString("utf-8");
-                    }
-                } catch {
-                    continue;
-                }
+                content = await this.readAttachment(attachment);
             }
 
             if (!detectedLog && !force) continue;
@@ -77,6 +84,47 @@ module.exports = {
 
             await message.reply(`${url}`);
         }
+    },
+
+    slash: {
+        data: new SlashCommandBuilder()
+            .setName("log")
+            .setDescription("Upload a log file to mclo.gs")
+            .setIntegrationTypes(
+                ApplicationIntegrationType.GuildInstall,
+                ApplicationIntegrationType.UserInstall,
+            )
+            .setContexts(
+                InteractionContextType.Guild,
+                InteractionContextType.BotDM,
+                InteractionContextType.PrivateChannel,
+            )
+            .addAttachmentOption(option =>
+                option
+                    .setName("file")
+                    .setDescription("Log file to upload")
+                    .setRequired(true)
+            ),
+
+        async execute(interaction) {
+            const attachment = interaction.options.getAttachment("file", true);
+
+            await interaction.deferReply();
+
+            const content = await module.exports.readAttachment(attachment);
+            if (typeof content !== "string") {
+                await interaction.editReply("Failed to read file");
+                return;
+            }
+
+            const url = await module.exports.upload(content);
+            if (!url) {
+                await interaction.editReply("Failed to upload");
+                return;
+            }
+
+            await interaction.editReply(url);
+        },
     },
 
     prefix: {

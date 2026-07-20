@@ -1,4 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
+const {
+    ApplicationIntegrationType,
+    InteractionContextType,
+    SlashCommandBuilder,
+} = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require("fs");
@@ -122,6 +126,15 @@ module.exports = {
         data: new SlashCommandBuilder()
             .setName('remindme')
             .setDescription('Set a reminder')
+            .setIntegrationTypes(
+                ApplicationIntegrationType.GuildInstall,
+                ApplicationIntegrationType.UserInstall,
+            )
+            .setContexts(
+                InteractionContextType.Guild,
+                InteractionContextType.BotDM,
+                InteractionContextType.PrivateChannel,
+            )
             .addStringOption(option =>
                 option
                     .setName('time')
