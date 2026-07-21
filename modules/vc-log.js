@@ -10,6 +10,11 @@ const events = {
         const member = newState.member ?? oldState.member;
         if (member?.user?.bot) return;
 
+        console.log(
+            `[VC LOG] ${member?.user?.tag ?? member?.id ?? 'Unknown user'}: ` +
+            `${oldChannel?.name ?? 'none'} -> ${newChannel?.name ?? 'none'}`
+        );
+
         const displayName = member?.displayName ?? member?.user?.tag ?? 'Unknown user';
         const avatarUrl = member?.displayAvatarURL?.({ size: 128 }) ?? member?.user?.displayAvatarURL?.({ size: 128 });
 
