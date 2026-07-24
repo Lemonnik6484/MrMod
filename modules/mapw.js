@@ -11,9 +11,14 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require("fs");
 
-const { adminRoles = [], adminUsers = [] } = (() => {
+const config = (() => {
     try { return require('../config.json'); } catch { return {}; }
 })();
+const {
+    adminRoles = [],
+    adminUsers = [],
+    mapwAnnouncement = {},
+} = config;
 
 const DB_PATH            = path.join(__dirname, '../module_data/mapw/mapw.db');
 const WHITELIST_PATH     = path.join(__dirname, '../module_data/mapw/botWhitelist.json');
@@ -22,9 +27,6 @@ const WINDOW_SECONDS     = 3;
 const WINDOW_MAX_MSGS    = 2;
 const DAY_TIER1          = 50;
 const DAY_TIER2          = 100;
-const VC_TICK_MINUTES    = 5;
-const VC_POINTS_PER_TICK = 1;
-const WEEK_MS            = 7 * 24 * 60 * 60 * 1000;
 const COLLECTOR_TIMEOUT  = 5 * 60 * 1000;
 
 fs.mkdirSync(path.join(__dirname, '../module_data/mapw'), { recursive: true });
@@ -159,7 +161,64 @@ function getOrCreate(guildId, userId) {
     return row;
 }
 
-function runWeeklyReset() {
+function resetGuild(guildId, now) {
+    const rows = stmts.allScores.all(guildId);
+    const top3 = stmts.top3.all(guildId);
+
+    if (top3.length > 0) {
+        const podium = top3
+            .map((r, i) => `#${i + 1} <@${r.user_id}> — ${parseInt(r.total)} pts`)
+            .join('\n');
+        console.log(`[MAPW] Top ${top3.length} for guild ${guildId} before reset:\n${podium}`);
+    } else {
+        console.log(`[MAPW] Guild ${guildId} had no scores this week.`);
+    }
+
+    for (const row of rows) {
+        stmts.archiveInsert.run({
+            guild_id:    row.guild_id,
+            user_id:     row.user_id,
+            total:       row.total,
+            week_start:  row.week_start,
+            archived_at: now,
+        });
+    }
+    stmts.reset.run(guildId);
+    stmts.setLastReset.run(guildId, now);
+    console.log(`[MAPW] Archived ${rows.length} score(s) for guild ${guildId}.`);
+
+    return { totalArchived: rows.length, winner: top3[0] ?? null };
+}
+
+function formatAnnouncement(template, guild, winner) {
+    return template
+        .split('{winner}').join(`<@${winner.user_id}>`)
+        .split('{winner_id}').join(winner.user_id)
+        .split('{points}').join(String(Math.floor(winner.total)))
+        .split('{guild}').join(guild.name);
+}
+
+async function announceWinner(client, guildId, winner) {
+    const channelId = mapwAnnouncement.channelId;
+    const template = mapwAnnouncement.message;
+    if (!winner || !channelId || typeof template !== 'string' || !template.trim()) return false;
+
+    try {
+        const channel = await client.channels.fetch(channelId);
+        const guild = channel?.guild;
+        if (!channel?.isTextBased?.() || guild?.id !== guildId) {
+            console.warn(`[MAPW] Announcement channel ${channelId} is not a text channel in guild ${guildId}.`);
+            return false;
+        }
+        await channel.send(formatAnnouncement(template, guild, winner));
+        return true;
+    } catch (err) {
+        console.error(`[MAPW] Failed to announce winner for guild ${guildId}:`, err.message);
+        return false;
+    }
+}
+
+async function runWeeklyReset(client) {
     const now = Date.now();
     const guilds = stmts.allGuilds.all();
 
@@ -170,40 +229,21 @@ function runWeeklyReset() {
 
     const archiveTx = db.transaction(() => {
         let totalArchived = 0;
+        const winners = [];
         for (const { guild_id } of guilds) {
-            const rows = stmts.allScores.all(guild_id);
-
-            const top3 = stmts.top3.all(guild_id);
-            if (top3.length > 0) {
-                const podium = top3
-                    .map((r, i) => `#${i + 1} <@${r.user_id}> — ${parseInt(r.total)} pts`)
-                    .join('\n');
-                console.log(`[MAPW] Top ${top3.length} for guild ${guild_id} before reset:\n${podium}`);
-            } else {
-                console.log(`[MAPW] Guild ${guild_id} had no scores this week.`);
-            }
-
-            for (const row of rows) {
-                stmts.archiveInsert.run({
-                    guild_id:    row.guild_id,
-                    user_id:     row.user_id,
-                    total:       row.total,
-                    week_start:  row.week_start,
-                    archived_at: now,
-                });
-            }
-            stmts.reset.run(guild_id);
-            stmts.setLastReset.run(guild_id, now);
-            totalArchived += rows.length;
-            console.log(`[MAPW] Archived ${rows.length} score(s) for guild ${guild_id}.`);
+            const result = resetGuild(guild_id, now);
+            totalArchived += result.totalArchived;
+            if (result.winner) winners.push({ guildId: guild_id, winner: result.winner });
         }
         console.log(`[MAPW] Weekly reset complete — ${totalArchived} total score(s) archived across ${guilds.length} guild(s).`);
+        return winners;
     });
 
-    archiveTx();
+    const winners = archiveTx();
+    await Promise.all(winners.map(({ guildId, winner }) => announceWinner(client, guildId, winner)));
 }
 
-function scheduleWeeklyReset() {
+function scheduleWeeklyReset(client) {
     let lastCheckedWeek = currentWeekStart();
 
     const startupWeek = currentWeekStart();
@@ -213,7 +253,7 @@ function scheduleWeeklyReset() {
         const lastReset = resetRow?.last_reset ?? 0;
         if (lastReset < startupWeek) {
             console.log('[MAPW] Missed weekly reset detected on startup — running now.');
-            runWeeklyReset();
+            void runWeeklyReset(client);
         }
     }
 
@@ -222,7 +262,7 @@ function scheduleWeeklyReset() {
         if (week !== lastCheckedWeek) {
             lastCheckedWeek = week;
             console.log('[MAPW] New week detected — archiving scores and resetting leaderboard.');
-            runWeeklyReset();
+            void runWeeklyReset(client);
         }
     }, 60 * 60 * 1000); // check every hour
 }
@@ -312,61 +352,6 @@ async function scoreMessage(guild, guildId, userId, content) {
     console.log(`[mapw] +${effective.toFixed(2)} pts → ${displayName} (${userId})`);
 
     return effective;
-}
-
-// voiceSessions[guildId][userId] = { lastTick: ms }
-const voiceSessions = {};
-
-function isEligible(vs) {
-    if (!vs?.channel) return false;
-    if (vs.selfDeaf || vs.serverDeaf || vs.selfMute || vs.serverMute) return false;
-    return vs.channel.members.filter(m => !m.user.bot && m.id !== vs.member.id).size > 0;
-}
-
-function handleVoiceStateUpdate(oldState, newState) {
-    const guildId = newState.guild?.id || oldState.guild?.id;
-    const userId  = newState.member?.id || oldState.member?.id;
-    if (!guildId || !userId) return;
-
-    if (!voiceSessions[guildId]) voiceSessions[guildId] = {};
-    const sessions = voiceSessions[guildId];
-
-    const nowOk = isEligible(newState);
-    const wasOk = isEligible(oldState);
-
-    if (nowOk && !sessions[userId]) {
-        sessions[userId] = { lastTick: Date.now() };
-    }
-    if (!nowOk && sessions[userId]) {
-        awardVcTicks(guildId, userId);
-        delete sessions[userId];
-    }
-}
-
-function awardVcTicks(guildId, userId) {
-    const session = voiceSessions[guildId]?.[userId];
-    if (!session) return;
-    const ticks = Math.floor((Date.now() - session.lastTick) / (VC_TICK_MINUTES * 60 * 1000));
-    if (ticks < 1) return;
-    session.lastTick += ticks * VC_TICK_MINUTES * 60 * 1000;
-
-    const row = getOrCreate(guildId, userId);
-    for (let i = 0; i < ticks; i++) {
-        let pts = VC_POINTS_PER_TICK;
-        if (row.daily_pts >= DAY_TIER2)      pts *= 0.25;
-        else if (row.daily_pts >= DAY_TIER1) pts *= 0.5;
-        row.daily_pts += pts;
-        row.total     += pts;
-    }
-    saveRow(row);
-}
-
-function tickAllVc() {
-    for (const [guildId, sessions] of Object.entries(voiceSessions)) {
-        for (const userId of Object.keys(sessions)) {
-            awardVcTicks(guildId, userId);
-        }
-    }
 }
 
 function isAdmin(member) {
@@ -461,6 +446,10 @@ const slashCommand = {
         .addSubcommand(sub =>
             sub.setName('reset')
                 .setDescription('Reset the leaderboard for this server')
+        )
+        .addSubcommand(sub =>
+            sub.setName('announce')
+                .setDescription('Announce the current MAPW winner')
         ),
 
     async execute(interaction, client) {
@@ -538,9 +527,34 @@ const slashCommand = {
             if (!isAdmin(member)) {
                 return interaction.reply({ content: "You're not an admin, go away", ephemeral: true });
             }
-            stmts.reset.run(guildId);
-            stmts.setLastReset.run(guildId, Date.now());
-            return interaction.reply({ content: 'Nuked it sir', ephemeral: true });
+            const result = db.transaction(() => resetGuild(guildId, Date.now()))();
+            const announced = await announceWinner(client, guildId, result.winner);
+            return interaction.reply({
+                content: result.winner
+                    ? `Leaderboard reset.${announced ? ' Winner announced.' : ' No winner announcement was sent.'}`
+                    : 'Leaderboard reset. There was no winner to announce.',
+                ephemeral: true,
+            });
+        }
+
+        if (sub === 'announce') {
+            const member = await interaction.guild.members.fetch(interaction.user.id);
+            if (!isAdmin(member)) {
+                return interaction.reply({ content: "You're not an admin, go away", ephemeral: true });
+            }
+
+            const winner = stmts.top3.get(guildId);
+            if (!winner) {
+                return interaction.reply({ content: 'There is no MAPW winner to announce yet.', ephemeral: true });
+            }
+
+            const announced = await announceWinner(client, guildId, winner);
+            return interaction.reply({
+                content: announced
+                    ? 'MAPW winner announced.'
+                    : 'No announcement was sent. Check `mapwAnnouncement` in config.json.',
+                ephemeral: true,
+            });
         }
     },
 };
@@ -551,32 +565,11 @@ const events = {
         if (!message.guildId) return;
         scoreMessage(message.guild, message.guildId, message.author.id, message.content).then(r => {});
     },
-    voiceStateUpdate(oldState, newState) {
-        handleVoiceStateUpdate(oldState, newState);
-    },
 };
 
 function init(client) {
-    for (const guild of client.guilds.cache.values()) {
-        for (const channel of guild.channels.cache.values()) {
-            if (channel.type !== 2) continue;
-
-            for (const member of channel.members.values()) {
-                if (member.user.bot) continue;
-
-                const vs = member.voice;
-                if (isEligible(vs)) {
-                    if (!voiceSessions[guild.id]) voiceSessions[guild.id] = {};
-                    voiceSessions[guild.id][member.id] = { lastTick: Date.now() };
-                    console.log(`[MAPW] Seeded VC session for ${member.displayName} in ${guild.name}`);
-                }
-            }
-        }
-    }
-
-    setInterval(tickAllVc, 60 * 1000);
-    scheduleWeeklyReset();
-    console.log('[MAPW] SQLite DB ready. Voice ticker started. Weekly archive scheduler started.');
+    scheduleWeeklyReset(client);
+    console.log('[MAPW] SQLite DB ready. Weekly archive scheduler started.');
     console.log(`[MAPW] Bot whitelist loaded: ${botWhitelist.size} entr${botWhitelist.size === 1 ? 'y' : 'ies'}`);
 }
 
