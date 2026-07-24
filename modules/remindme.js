@@ -29,7 +29,11 @@ const insertReminder = db.prepare(`
     VALUES (@user_id, @channel_id, @guild_id, @note, @fire_at, @label)
 `);
 
-const markDone = db.prepare(`UPDATE reminders SET done = 1 WHERE id = ?`);
+const markDone = db.prepare(`
+    UPDATE reminders
+    SET done = 1
+    WHERE id = ? AND done = 0
+`);
 
 const getPending = db.prepare(`
     SELECT * FROM reminders WHERE done = 0 AND fire_at <= ?
