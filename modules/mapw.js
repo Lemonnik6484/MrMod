@@ -16,7 +16,7 @@ const { adminRoles = [], adminUsers = [] } = (() => {
 })();
 
 const DB_PATH            = path.join(__dirname, '../module_data/mapw/mapw.db');
-const WHITELIST_PATH     = path.join(__dirname, '../module_data/mapw/botWhitelist.json');
+const CONFIG_PATH        = path.join(__dirname, '../module_data/mapw/config.json');
 const PAGE_SIZE          = 5;
 const WINDOW_SECONDS     = 3;
 const WINDOW_MAX_MSGS    = 2;
@@ -29,27 +29,35 @@ const COLLECTOR_TIMEOUT  = 5 * 60 * 1000;
 
 fs.mkdirSync(path.join(__dirname, '../module_data/mapw'), { recursive: true });
 
-function loadBotWhitelist() {
+function loadConfig() {
     try {
-        const raw = fs.readFileSync(WHITELIST_PATH, 'utf8');
+        const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-            console.warn('[MAPW] botWhitelist.json should be an array of bot user IDs, defaulting to empty.');
-            return new Set();
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            console.warn('[MAPW] config.json should be an object, defaulting to empty settings.');
+            return {};
         }
-        return new Set(parsed);
+        return parsed;
     } catch (err) {
         if (err.code === 'ENOENT') {
-            fs.writeFileSync(WHITELIST_PATH, '[]', 'utf8');
-            console.log('[MAPW] botWhitelist.json not found — created an empty one at', WHITELIST_PATH);
+            const defaultConfig = {
+                botWhitelist: [],
+                winnerAnnouncementChannelId: '',
+            };
+            fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(defaultConfig, null, 2)}\n`, 'utf8');
+            console.log('[MAPW] config.json not found — created one at', CONFIG_PATH);
         } else {
-            console.warn('[MAPW] Failed to load botWhitelist.json:', err.message);
+            console.warn('[MAPW] Failed to load config.json:', err.message);
         }
-        return new Set();
+        return {};
     }
 }
 
-let botWhitelist = loadBotWhitelist();
+const mapwConfig = loadConfig();
+const botWhitelist = new Set(Array.isArray(mapwConfig.botWhitelist) ? mapwConfig.botWhitelist : []);
+const winnerAnnouncementChannelId = typeof mapwConfig.winnerAnnouncementChannelId === 'string'
+    ? mapwConfig.winnerAnnouncementChannelId.trim()
+    : '';
 
 const db = new Database(DB_PATH);
 
@@ -159,7 +167,33 @@ function getOrCreate(guildId, userId) {
     return row;
 }
 
-function runWeeklyReset() {
+async function announceWinners(client, guildId, top3) {
+    if (!winnerAnnouncementChannelId || top3.length === 0) return;
+
+    try {
+        const channel = await client.channels.fetch(winnerAnnouncementChannelId);
+        if (!channel?.isTextBased() || typeof channel.send !== 'function') {
+            console.warn(`[MAPW] Winner announcement channel ${winnerAnnouncementChannelId} is not a text channel.`);
+            return;
+        }
+
+        const podium = top3
+            .map((row, index) => `#${index + 1} <@${row.user_id}> — ${parseInt(row.total)} pts`)
+            .join('\n');
+
+        await channel.send({
+            embeds: [new EmbedBuilder()
+                .setTitle('MAPW Winners')
+                .setDescription(`Congratulations to this week's most active members!\n\n${podium}`)
+                .setColor(0xf1c40f)
+                .setTimestamp()],
+        });
+    } catch (err) {
+        console.warn(`[MAPW] Failed to announce winners for guild ${guildId}:`, err.message);
+    }
+}
+
+function runWeeklyReset(client) {
     const now = Date.now();
     const guilds = stmts.allGuilds.all();
 
@@ -170,6 +204,7 @@ function runWeeklyReset() {
 
     const archiveTx = db.transaction(() => {
         let totalArchived = 0;
+        const winnerAnnouncements = [];
         for (const { guild_id } of guilds) {
             const rows = stmts.allScores.all(guild_id);
 
@@ -179,6 +214,7 @@ function runWeeklyReset() {
                     .map((r, i) => `#${i + 1} <@${r.user_id}> — ${parseInt(r.total)} pts`)
                     .join('\n');
                 console.log(`[MAPW] Top ${top3.length} for guild ${guild_id} before reset:\n${podium}`);
+                winnerAnnouncements.push({ guildId: guild_id, top3 });
             } else {
                 console.log(`[MAPW] Guild ${guild_id} had no scores this week.`);
             }
@@ -198,12 +234,18 @@ function runWeeklyReset() {
             console.log(`[MAPW] Archived ${rows.length} score(s) for guild ${guild_id}.`);
         }
         console.log(`[MAPW] Weekly reset complete — ${totalArchived} total score(s) archived across ${guilds.length} guild(s).`);
+        return winnerAnnouncements;
     });
 
-    archiveTx();
+    const winnerAnnouncements = archiveTx();
+    if (client) {
+        for (const { guildId, top3 } of winnerAnnouncements) {
+            void announceWinners(client, guildId, top3);
+        }
+    }
 }
 
-function scheduleWeeklyReset() {
+function scheduleWeeklyReset(client) {
     let lastCheckedWeek = currentWeekStart();
 
     const startupWeek = currentWeekStart();
@@ -213,7 +255,7 @@ function scheduleWeeklyReset() {
         const lastReset = resetRow?.last_reset ?? 0;
         if (lastReset < startupWeek) {
             console.log('[MAPW] Missed weekly reset detected on startup — running now.');
-            runWeeklyReset();
+            runWeeklyReset(client);
         }
     }
 
@@ -222,7 +264,7 @@ function scheduleWeeklyReset() {
         if (week !== lastCheckedWeek) {
             lastCheckedWeek = week;
             console.log('[MAPW] New week detected — archiving scores and resetting leaderboard.');
-            runWeeklyReset();
+            runWeeklyReset(client);
         }
     }, 60 * 60 * 1000); // check every hour
 }
