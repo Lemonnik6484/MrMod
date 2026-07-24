@@ -60,7 +60,7 @@ function formatDuration({ days, hours, minutes }) {
 }
 
 async function fireReminder(client, reminder) {
-    markDone.run(reminder.id);
+    if (markDone.run(reminder.id).changes !== 1) return;
 
     const text =
         `<@${reminder.user_id}> **Reminder!**\n` +
