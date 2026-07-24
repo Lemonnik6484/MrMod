@@ -67,7 +67,7 @@ module.exports = {
                 if (!reminder) {
                     return interaction.reply({
                         content: `No active reminder exists at index ${index}.`,
-                        ephemeral: true,
+                        ephemeral: false,
                     });
                 }
 
@@ -75,13 +75,13 @@ module.exports = {
                 if (result.changes !== 1) {
                     return interaction.reply({
                         content: 'That reminder is no longer active.',
-                        ephemeral: true,
+                        ephemeral: false,
                     });
                 }
 
                 return interaction.reply({
                     content: `Removed reminder ${index}: **${reminder.label}**${reminder.note ? ` — ${reminder.note}` : ''}.`,
-                    ephemeral: true,
+                    ephemeral: false,
                 });
             }
 
