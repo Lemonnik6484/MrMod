@@ -53,8 +53,6 @@ db.exec(`
     );
 `);
 
-// Existing installations may still have the legacy ownership column.
-// It was never needed for group membership, so remove it without touching groups.
 if (db.prepare(`PRAGMA table_info(groups)`).all().some(column => column.name === 'owner_id')) {
     db.exec(`ALTER TABLE groups DROP COLUMN owner_id`);
 }
@@ -85,13 +83,21 @@ const stmts = {
     `),
 };
 
+function formatGroupListLines(groups, userGroupNames = new Set()) {
+    const longestName = Math.max(...groups.map(({ name }) => name.length));
+
+    return groups.map(({ id, name }) => {
+        const { cnt } = stmts.memberCount.get(id);
+        const membershipMark = userGroupNames.has(name) ? ' ✅' : '';
+
+        return `\`${name.padEnd(longestName)}\` — ${cnt} member${cnt === 1 ? '' : 's'}${membershipMark}`;
+    });
+}
+
 function groupListEmbeds(guildId, guildName) {
     const groups = stmts.listGroups.all(guildId);
     const lines = groups.length
-        ? groups.map(({ id, name }) => {
-            const { cnt } = stmts.memberCount.get(id);
-            return `**${name}** — ${cnt} member${cnt === 1 ? '' : 's'}`;
-        })
+        ? formatGroupListLines(groups)
         : ['No groups yet. Create one with `/group create <name>`.'];
 
     const descriptions = [];
@@ -442,13 +448,7 @@ const slashCommand = {
                 stmts.userGroups.all(guildId, userId).map(r => r.name)
             );
 
-            const lines = groups.map(({ id, name }) => {
-                const { cnt } = stmts.memberCount.get(id);
-
-                const inGroup = userGroupNames.has(name) ? ' ✅' : '';
-
-                return `**${name}**${inGroup} — ${cnt} member${cnt !== 1 ? 's' : ''}`;
-            });
+            const lines = formatGroupListLines(groups, userGroupNames);
 
             return interaction.reply({
                 embeds: [
