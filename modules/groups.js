@@ -35,7 +35,6 @@ db.exec(`
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id    TEXT NOT NULL,
         name        TEXT NOT NULL,
-        owner_id    TEXT NOT NULL,
         created_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
         UNIQUE(guild_id, name)
     );
@@ -54,11 +53,17 @@ db.exec(`
     );
 `);
 
+// Existing installations may still have the legacy ownership column.
+// It was never needed for group membership, so remove it without touching groups.
+if (db.prepare(`PRAGMA table_info(groups)`).all().some(column => column.name === 'owner_id')) {
+    db.exec(`ALTER TABLE groups DROP COLUMN owner_id`);
+}
+
 const stmts = {
     getGroup:      db.prepare(`SELECT * FROM groups WHERE guild_id = ? AND name = ? COLLATE NOCASE`),
-    createGroup:   db.prepare(`INSERT INTO groups (guild_id, name, owner_id) VALUES (?, ?, ?)`),
+    createGroup:   db.prepare(`INSERT INTO groups (guild_id, name) VALUES (?, ?)`),
     deleteGroup:   db.prepare(`DELETE FROM groups WHERE id = ?`),
-    listGroups:    db.prepare(`SELECT id, name, owner_id FROM groups WHERE guild_id = ? ORDER BY name ASC`),
+    listGroups:    db.prepare(`SELECT id, name FROM groups WHERE guild_id = ? ORDER BY name ASC`),
 
     isMember:      db.prepare(`SELECT 1 FROM memberships WHERE group_id = ? AND user_id = ?`),
     addMember:     db.prepare(`INSERT OR IGNORE INTO memberships (group_id, user_id) VALUES (?, ?)`),
@@ -138,9 +143,11 @@ async function updateGroupList(client, guildId) {
 
         if (message) {
             await message.edit({ embeds });
+            console.log(`[GROUPS] Updated live group list in ${channelId} for guild ${guildId}.`);
         } else {
             message = await channel.send({ embeds });
             stmts.setListMessage.run(guildId, channelId, message.id);
+            console.log(`[GROUPS] Created live group list in ${channelId} for guild ${guildId}.`);
         }
     } catch (error) {
         console.error(`[GROUPS] Failed to update live list for guild ${guildId}:`, error.message);
@@ -299,7 +306,7 @@ const slashCommand = {
                 });
             }
 
-            const info = stmts.createGroup.run(guildId, name, userId);
+            const info = stmts.createGroup.run(guildId, name);
 
             stmts.addMember.run(info.lastInsertRowid, userId);
             refreshGroupList(interaction.client, guildId);
@@ -314,9 +321,7 @@ const slashCommand = {
                             `Others can join with \`/group join ${name}\`\n` +
                             `Ping everyone with \`/group ping ${name}\``
                         )
-                        .setFooter({
-                            text: `${displayName} has been added automatically as the owner`,
-                        }),
+                        .setFooter({ text: `${displayName} has been added automatically` }),
                 ],
             });
         }
@@ -370,15 +375,6 @@ const slashCommand = {
             }
 
             stmts.removeMember.run(group.id, userId);
-
-            if (group.owner_id === userId) {
-                const next = stmts.getMembers.all(group.id)[0];
-
-                if (next) {
-                    db.prepare(`UPDATE groups SET owner_id = ? WHERE id = ?`)
-                        .run(next.user_id, group.id);
-                }
-            }
 
             refreshGroupList(interaction.client, guildId);
 
@@ -507,9 +503,7 @@ const slashCommand = {
                         memberName = `<@${user_id}>`;
                     }
 
-                    const isOwner = user_id === group.owner_id ? ' 👑' : '';
-
-                    return `• ${memberName}${isOwner}`;
+                    return `• ${memberName}`;
                 })
             );
 
@@ -519,9 +513,7 @@ const slashCommand = {
                         .setColor(0x5865f2)
                         .setTitle(`Group: ${name}`)
                         .setDescription(lines.join('\n') || 'No members.')
-                        .setFooter({
-                            text: `${members.length} member${members.length !== 1 ? 's' : ''} • 👑 = owner`,
-                        }),
+                        .setFooter({ text: `${members.length} member${members.length !== 1 ? 's' : ''}` }),
                 ],
             });
         }
@@ -579,10 +571,6 @@ const slashCommand = {
                 if (!alreadyMember) return interaction.reply({ content: `<@${target.id}> is not in **${name}**.`, ephemeral: true });
                 stmts.removeMember.run(group.id, target.id);
 
-                if (group.owner_id === target.id) {
-                    const nextOwner = stmts.getMembers.all(group.id)[0];
-                    if (nextOwner) db.prepare('UPDATE groups SET owner_id = ? WHERE id = ?').run(nextOwner.user_id, group.id);
-                }
             }
 
             refreshGroupList(interaction.client, guildId);
