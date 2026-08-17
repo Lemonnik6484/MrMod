@@ -1,6 +1,7 @@
 const {
     SlashCommandBuilder,
     EmbedBuilder,
+    PermissionFlagsBits,
 } = require('discord.js');
 
 const Database = require('better-sqlite3');
@@ -8,8 +9,24 @@ const path = require('path');
 const fs = require('fs');
 
 const DB_PATH = path.join(__dirname, '../module_data/groups/groups.db');
+const CONFIG_PATH = path.join(__dirname, '../module_data/groups/config.json');
 
 fs.mkdirSync(path.join(__dirname, '../module_data/groups'), { recursive: true });
+
+function loadConfig() {
+    try {
+        const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            fs.writeFileSync(CONFIG_PATH, `${JSON.stringify({ groupListChannelId: '' }, null, 2)}\n`, 'utf8');
+            console.log('[GROUPS] Created config.json. Set groupListChannelId to enable the live group list.');
+        } else {
+            console.warn('[GROUPS] Unable to read config.json:', error.message);
+        }
+        return {};
+    }
+}
 
 const db = new Database(DB_PATH);
 
@@ -29,13 +46,19 @@ db.exec(`
         joined_at   INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
         PRIMARY KEY (group_id, user_id)
     );
+
+    CREATE TABLE IF NOT EXISTS group_list_messages (
+        guild_id    TEXT PRIMARY KEY,
+        channel_id  TEXT NOT NULL,
+        message_id  TEXT NOT NULL
+    );
 `);
 
 const stmts = {
     getGroup:      db.prepare(`SELECT * FROM groups WHERE guild_id = ? AND name = ? COLLATE NOCASE`),
     createGroup:   db.prepare(`INSERT INTO groups (guild_id, name, owner_id) VALUES (?, ?, ?)`),
     deleteGroup:   db.prepare(`DELETE FROM groups WHERE id = ?`),
-    listGroups:    db.prepare(`SELECT name FROM groups WHERE guild_id = ? ORDER BY name ASC`),
+    listGroups:    db.prepare(`SELECT id, name, owner_id FROM groups WHERE guild_id = ? ORDER BY name ASC`),
 
     isMember:      db.prepare(`SELECT 1 FROM memberships WHERE group_id = ? AND user_id = ?`),
     addMember:     db.prepare(`INSERT OR IGNORE INTO memberships (group_id, user_id) VALUES (?, ?)`),
@@ -49,7 +72,86 @@ const stmts = {
         WHERE g.guild_id = ? AND m.user_id = ?
         ORDER BY g.name ASC
     `),
+    getListMessage: db.prepare(`SELECT * FROM group_list_messages WHERE guild_id = ?`),
+    setListMessage: db.prepare(`
+        INSERT INTO group_list_messages (guild_id, channel_id, message_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET channel_id = excluded.channel_id, message_id = excluded.message_id
+    `),
 };
+
+function groupListEmbeds(guildId, guildName) {
+    const groups = stmts.listGroups.all(guildId);
+    const lines = groups.length
+        ? groups.map(({ id, name }) => {
+            const { cnt } = stmts.memberCount.get(id);
+            return `**${name}** — ${cnt} member${cnt === 1 ? '' : 's'}`;
+        })
+        : ['No groups yet. Create one with `/group create <name>`.'];
+
+    const descriptions = [];
+    for (const line of lines) {
+        const previous = descriptions.at(-1);
+        if (!previous || previous.length + line.length + 1 > 4096) {
+            descriptions.push(line);
+        } else {
+            descriptions[descriptions.length - 1] = `${previous}\n${line}`;
+        }
+    }
+
+    return descriptions.map((description, index) =>
+        new EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle(index === 0 ? `Groups in ${guildName}` : `Groups in ${guildName} (continued)`)
+            .setDescription(description)
+            .setFooter({ text: 'This list updates automatically.' })
+    );
+}
+
+async function updateGroupList(client, guildId) {
+    const config = loadConfig();
+    const channelId = typeof config.groupListChannelId === 'string'
+        ? config.groupListChannelId.trim()
+        : '';
+
+    if (!channelId) return;
+
+    try {
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.isTextBased() || typeof channel.send !== 'function') {
+            console.warn(`[GROUPS] Configured group list channel ${channelId} is not a text channel.`);
+            return;
+        }
+        if (channel.guildId !== guildId) return;
+
+        const embeds = groupListEmbeds(guildId, channel.guild?.name ?? 'this server');
+        const saved = stmts.getListMessage.get(guildId);
+        let message = null;
+
+        if (saved?.channel_id === channelId) {
+            try {
+                message = await channel.messages.fetch(saved.message_id);
+            } catch {
+                // The list message was deleted; create a replacement below.
+            }
+        }
+
+        if (message) {
+            await message.edit({ embeds });
+        } else {
+            message = await channel.send({ embeds });
+            stmts.setListMessage.run(guildId, channelId, message.id);
+        }
+    } catch (error) {
+        console.error(`[GROUPS] Failed to update live list for guild ${guildId}:`, error.message);
+    }
+}
+
+function refreshGroupList(client, guildId) {
+    updateGroupList(client, guildId).catch(error => {
+        console.error(`[GROUPS] Failed to schedule live list update for guild ${guildId}:`, error.message);
+    });
+}
 
 const slashCommand = {
     data: new SlashCommandBuilder()
@@ -102,7 +204,17 @@ const slashCommand = {
 
         .addSubcommand(sub =>
             sub.setName('list')
-                .setDescription('List all groups')
+            .setDescription('List all groups')
+        )
+
+        .addSubcommand(sub =>
+            sub.setName('user')
+                .setDescription('Show the groups a user belongs to')
+                .addUserOption(opt =>
+                    opt.setName('user')
+                        .setDescription('User to look up')
+                        .setRequired(true)
+                )
         )
 
         .addSubcommand(sub =>
@@ -118,13 +230,27 @@ const slashCommand = {
 
         .addSubcommand(sub =>
             sub.setName('delete')
-                .setDescription('Delete a group you own')
+                .setDescription('Delete a group (admin only)')
                 .addStringOption(opt =>
                     opt.setName('name')
                         .setDescription('Group name')
                         .setRequired(true)
                         .setAutocomplete(true)
                 )
+        )
+
+        .addSubcommand(sub =>
+            sub.setName('add')
+                .setDescription('Add a user to a group (admin only)')
+                .addStringOption(opt => opt.setName('name').setDescription('Group name').setRequired(true).setAutocomplete(true))
+                .addUserOption(opt => opt.setName('user').setDescription('User to add').setRequired(true))
+        )
+
+        .addSubcommand(sub =>
+            sub.setName('remove')
+                .setDescription('Remove a user from a group (admin only)')
+                .addStringOption(opt => opt.setName('name').setDescription('Group name').setRequired(true).setAutocomplete(true))
+                .addUserOption(opt => opt.setName('user').setDescription('User to remove').setRequired(true))
         ),
 
     async autocomplete(interaction) {
@@ -176,6 +302,7 @@ const slashCommand = {
             const info = stmts.createGroup.run(guildId, name, userId);
 
             stmts.addMember.run(info.lastInsertRowid, userId);
+            refreshGroupList(interaction.client, guildId);
 
             return interaction.reply({
                 embeds: [
@@ -213,6 +340,7 @@ const slashCommand = {
             }
 
             stmts.addMember.run(group.id, userId);
+            refreshGroupList(interaction.client, guildId);
 
             return interaction.reply({
                 embeds: [
@@ -243,20 +371,6 @@ const slashCommand = {
 
             stmts.removeMember.run(group.id, userId);
 
-            const { cnt } = stmts.memberCount.get(group.id);
-
-            if (cnt === 0) {
-                stmts.deleteGroup.run(group.id);
-
-                return interaction.reply({
-                    embeds: [
-                        new EmbedBuilder()
-                            .setColor(0xed4245)
-                            .setDescription(`${displayName} left **${name}**`),
-                    ],
-                });
-            }
-
             if (group.owner_id === userId) {
                 const next = stmts.getMembers.all(group.id)[0];
 
@@ -265,6 +379,8 @@ const slashCommand = {
                         .run(next.user_id, group.id);
                 }
             }
+
+            refreshGroupList(interaction.client, guildId);
 
             return interaction.reply({
                 embeds: [
@@ -330,10 +446,8 @@ const slashCommand = {
                 stmts.userGroups.all(guildId, userId).map(r => r.name)
             );
 
-            const lines = groups.map(({ name }) => {
-                const { cnt } = stmts.memberCount.get(
-                    stmts.getGroup.get(guildId, name).id
-                );
+            const lines = groups.map(({ id, name }) => {
+                const { cnt } = stmts.memberCount.get(id);
 
                 const inGroup = userGroupNames.has(name) ? ' ✅' : '';
 
@@ -349,6 +463,20 @@ const slashCommand = {
                         .setFooter({
                             text: '✅ = you\'re a member',
                         }),
+                ],
+            });
+        }
+
+        if (sub === 'user') {
+            const target = interaction.options.getUser('user', true);
+            const groups = stmts.userGroups.all(guildId, target.id);
+
+            return interaction.reply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x5865f2)
+                        .setTitle(`Groups for ${target.username}`)
+                        .setDescription(groups.length ? groups.map(({ name }) => `• **${name}**`).join('\n') : 'This user is not in any groups.'),
                 ],
             });
         }
@@ -409,16 +537,17 @@ const slashCommand = {
                 });
             }
 
-            const isAdmin = member.permissions.has('Administrator');
+            const isAdmin = member.permissions.has(PermissionFlagsBits.Administrator);
 
-            if (group.owner_id !== userId && !isAdmin) {
+            if (!isAdmin) {
                 return interaction.reply({
-                    content: `Only the group owner or a server admin can delete **${name}**.`,
+                    content: `Only a server admin can delete **${name}**.`,
                     ephemeral: true,
                 });
             }
 
             stmts.deleteGroup.run(group.id);
+            refreshGroupList(interaction.client, guildId);
 
             return interaction.reply({
                 embeds: [
@@ -428,10 +557,53 @@ const slashCommand = {
                 ],
             });
         }
+
+        if (sub === 'add' || sub === 'remove') {
+            if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return interaction.reply({ content: 'Only a server admin can manage group members.', ephemeral: true });
+            }
+
+            const name = interaction.options.getString('name', true).toLowerCase();
+            const target = interaction.options.getUser('user', true);
+            const group = stmts.getGroup.get(guildId, name);
+
+            if (!group) {
+                return interaction.reply({ content: `Group **${name}** doesn't exist`, ephemeral: true });
+            }
+
+            const alreadyMember = Boolean(stmts.isMember.get(group.id, target.id));
+            if (sub === 'add') {
+                if (alreadyMember) return interaction.reply({ content: `<@${target.id}> is already in **${name}**.`, ephemeral: true });
+                stmts.addMember.run(group.id, target.id);
+            } else {
+                if (!alreadyMember) return interaction.reply({ content: `<@${target.id}> is not in **${name}**.`, ephemeral: true });
+                stmts.removeMember.run(group.id, target.id);
+
+                if (group.owner_id === target.id) {
+                    const nextOwner = stmts.getMembers.all(group.id)[0];
+                    if (nextOwner) db.prepare('UPDATE groups SET owner_id = ? WHERE id = ?').run(nextOwner.user_id, group.id);
+                }
+            }
+
+            refreshGroupList(interaction.client, guildId);
+            return interaction.reply({
+                embeds: [new EmbedBuilder().setColor(sub === 'add' ? 0x57f287 : 0xfee75c)
+                    .setDescription(`<@${target.id}> was ${sub === 'add' ? 'added to' : 'removed from'} **${name}**.`)],
+            });
+        }
     },
 };
 
 function init(client) {
+    client.once('ready', () => {
+        const config = loadConfig();
+        const channelId = typeof config.groupListChannelId === 'string' ? config.groupListChannelId.trim() : '';
+        if (!channelId) return;
+
+        client.channels.fetch(channelId)
+            .then(channel => channel?.guildId && updateGroupList(client, channel.guildId))
+            .catch(error => console.error('[GROUPS] Failed to initialize live group list:', error.message));
+    });
     console.log('[GROUPS] SQLite DB ready');
 }
 
